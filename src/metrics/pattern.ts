@@ -16,6 +16,8 @@ const STRING_TYPES = new Set([
   'varchar2', 'nvarchar2', 'clob', 'nclob', 'long',
   // HANA
   'nvarchar', 'nchar', 'nclob', 'shorttext', 'alphanum',
+  // Access
+  'text', 'memo', 'varchar', 'char',
 ]);
 
 // MSSQL pattern map (LIKE/PATINDEX equivalents of regex)
@@ -61,6 +63,19 @@ const ORACLE_PATTERN_MAP: Record<string, string> = {
   numeric_string: "(REGEXP_LIKE(val, '^[0-9.+-]+$') AND LENGTH(val) > 0)",
   iban: "REGEXP_LIKE(val, '^TR[0-9]{24}$')",
   credit_card: "(LENGTH(REPLACE(REPLACE(val,' ',''),'-','')) BETWEEN 13 AND 19 AND REGEXP_LIKE(REPLACE(REPLACE(val,' ',''),'-',''), '^[0-9]+$'))",
+};
+
+// Access LIKE pattern map (no regex, no PATINDEX)
+// Wildcards: * (any chars), ? (single char), # (single digit)
+const ACCESS_PATTERN_MAP: Record<string, string> = {
+  email: "val LIKE '*@*.*'",
+  phone_tr: "(val LIKE '0##########' OR val LIKE '+90##########')",
+  tc_kimlik: "(LEN(val) = 11 AND LEFT(val, 1) <> '0' AND ISNUMERIC(val))",
+  iso_date: "(LEN(val) >= 10 AND MID(val,5,1) = '-' AND MID(val,8,1) = '-')",
+  url: "(val LIKE 'http://*' OR val LIKE 'https://*')",
+  json_object: "(LEFT(val, 1) = '{' AND RIGHT(val, 1) = '}')",
+  numeric_string: "(ISNUMERIC(val) AND LEN(val) > 0)",
+  iban: "(LEN(val) = 26 AND LEFT(val, 2) = 'TR' AND ISNUMERIC(MID(val, 3)))",
 };
 
 export function isStringType(dataType: string): boolean {
@@ -138,6 +153,18 @@ export class PatternAnalyzer {
           LIMIT ${this.maxSample}
         ) sub
       `;
+    } else if (this.dbType === 'access') {
+      sqlText = `
+        SELECT
+          COUNT(*) AS sample_size,
+          ${patternCases}
+        FROM (
+          SELECT TOP ${this.maxSample}
+            CStr(${quotedColumn}) AS val
+          FROM ${quotedTable}
+          WHERE ${quotedColumn} IS NOT NULL
+        ) AS sub;
+      `;
     } else {
       sqlText = `
         SELECT
@@ -198,6 +225,7 @@ export class PatternAnalyzer {
   }
 
   private buildPatternCases(): string {
+    if (this.dbType === 'access') return this.buildAccessPatternCases();
     if (this.dbType === 'mssql') return this.buildMssqlPatternCases();
     if (this.dbType === 'oracle') return this.buildOraclePatternCases();
     if (this.dbType === 'hanabw') return this.buildHanaPatternCases();
@@ -236,6 +264,15 @@ export class PatternAnalyzer {
     for (const name of Object.keys(this.patterns)) {
       const expr = HANA_PATTERN_MAP[name] ?? '1=0';
       cases.push(`SUM(CASE WHEN ${expr} THEN 1 ELSE 0 END) AS pattern_${name}`);
+    }
+    return cases.join(',\n                ');
+  }
+
+  private buildAccessPatternCases(): string {
+    const cases: string[] = [];
+    for (const name of Object.keys(this.patterns)) {
+      const expr = ACCESS_PATTERN_MAP[name] ?? '1=0';
+      cases.push(`SUM(IIF(${expr}, 1, 0)) AS pattern_${name}`);
     }
     return cases.join(',\n                ');
   }

@@ -19,6 +19,8 @@ const NUMERIC_TYPES = new Set([
   // HANA
   'tinyint', 'smallint', 'integer', 'bigint', 'decimal', 'smalldecimal',
   'real', 'double', 'float',
+  // Access
+  'byte', 'long', 'single', 'double', 'currency',
 ]);
 
 export function isNumericType(dataType: string): boolean {
@@ -45,12 +47,17 @@ const HANA_NON_COMPARABLE = new Set([
   'blob', 'clob', 'nclob', 'text',
 ]);
 
+const ACCESS_NON_COMPARABLE = new Set([
+  'oleobject', 'ole object', 'memo', 'longchar', 'longbinary', 'hyperlink',
+]);
+
 /** Check if a column type is non-comparable (skip basic/topN/pattern metrics). */
 export function isNonComparableType(dataType: string, dbType: string): boolean {
   const dt = dataType.toLowerCase();
   if (dbType === 'mssql') return MSSQL_NON_COMPARABLE.has(dt);
   if (dbType === 'oracle') return ORACLE_NON_COMPARABLE.has(dt);
   if (dbType === 'hanabw') return HANA_NON_COMPARABLE.has(dt);
+  if (dbType === 'access') return ACCESS_NON_COMPARABLE.has(dt);
   return false;
 }
 
@@ -77,33 +84,40 @@ export class DistributionMetrics {
     if (rowCount === 0) return [];
 
     try {
-      let sqlText = this.sql.load('top_n_values', {
-        schema_name: schema,
-        table_name: table,
-        column_name: column,
-      });
-      sqlText = sqlText.replaceAll('{sample_clause}', samplePct ? `TABLESAMPLE SYSTEM (${Math.floor(samplePct)})` : '');
-
       let result;
-      if (this.dbType === 'mssql') {
-        // MSSQL: ? positional -> top_n, total_count
-        result = await conn.query(sqlText, [topN, rowCount]);
-      } else if (this.dbType === 'hanabw') {
-        // HANA: ? positional -> total_count, top_n
-        result = await conn.query(sqlText, [rowCount, topN]);
-      } else if (this.dbType === 'oracle') {
-        // Oracle: :total_count, :top_n named binds -> inlined
-        const ora = this.sql.oracleParams(sqlText, { total_count: rowCount, top_n: topN });
-        result = await conn.query(ora.sql, ora.values);
+      if (this.dbType === 'access') {
+        const accessSql = this.sql.load('top_n_values', {
+          table_name: table,
+          column_name: column,
+        }, {
+          top_n: topN,
+          total_count: rowCount,
+        });
+        result = await conn.query(accessSql);
       } else {
-        // PostgreSQL: %(total_count)s, %(top_n)s -> inlined
-        const pgResult = this.sql.pgParams(sqlText, { total_count: rowCount, top_n: topN });
-        result = await conn.query(pgResult.sql, pgResult.values);
+        let sqlText = this.sql.load('top_n_values', {
+          schema_name: schema,
+          table_name: table,
+          column_name: column,
+        });
+        sqlText = sqlText.replaceAll('{sample_clause}', samplePct ? `TABLESAMPLE SYSTEM (${Math.floor(samplePct)})` : '');
+
+        if (this.dbType === 'mssql') {
+          result = await conn.query(sqlText, [topN, rowCount]);
+        } else if (this.dbType === 'hanabw') {
+          result = await conn.query(sqlText, [rowCount, topN]);
+        } else if (this.dbType === 'oracle') {
+          const ora = this.sql.oracleParams(sqlText, { total_count: rowCount, top_n: topN });
+          result = await conn.query(ora.sql, ora.values);
+        } else {
+          const pgResult = this.sql.pgParams(sqlText, { total_count: rowCount, top_n: topN });
+          result = await conn.query(pgResult.sql, pgResult.values);
+        }
       }
 
       return result.rows.map((r) => ({
-        value: String(r.value ?? ''),
-        frequency: Number(r.frequency),
+        value: String(r.value ?? r.val ?? ''),
+        frequency: Number(r.frequency ?? r.freq ?? 0),
         pct: Number(r.pct),
       }));
     } catch (err) {
@@ -124,6 +138,11 @@ export class DistributionMetrics {
     samplePct?: number | null,
   ): Promise<Record<string, number | null> | null> {
     const logger = getLogger();
+
+    if (this.dbType === 'access') {
+      return this.getAccessNumericStats(conn, table, column);
+    }
+
     try {
       let sqlText = this.sql.load('numeric_stats', {
         schema_name: schema,
@@ -156,6 +175,40 @@ export class DistributionMetrics {
     return null;
   }
 
+  /**
+   * Access numeric stats: SQL for mean/stddev, Node.js-side percentiles.
+   */
+  private async getAccessNumericStats(
+    conn: DbConnection,
+    table: string,
+    column: string,
+  ): Promise<Record<string, number | null> | null> {
+    const logger = getLogger();
+    try {
+      const sqlText = this.sql.load('numeric_stats', {
+        table_name: table,
+        column_name: column,
+      });
+      const { rows } = await conn.query(sqlText);
+      const row = rows[0];
+      const mean = row?.mean_value != null ? Number(row.mean_value) : null;
+      const stddev = row?.stddev_value != null ? Number(row.stddev_value) : null;
+
+      const { AccessConnector } = await import('../connectors/access-connector.js');
+      const accessConn = this.connector as InstanceType<typeof AccessConnector>;
+      const sortedValues = await accessConn.getSortedColumnValues(conn, table, column);
+      const percentiles = AccessConnector.calculatePercentiles(
+        sortedValues,
+        [0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99],
+      );
+
+      return { mean, stddev, ...percentiles };
+    } catch (err) {
+      logger.warn(`[default.${table}.${column}] access numeric_stats hatasi: ${err}`);
+    }
+    return null;
+  }
+
   async getHistogram(
     conn: DbConnection,
     schema: string,
@@ -166,14 +219,23 @@ export class DistributionMetrics {
   ): Promise<HistogramBucket[] | null> {
     const logger = getLogger();
     try {
-      let sqlText = this.sql.load('histogram', {
-        schema_name: schema,
-        table_name: table,
-        column_name: column,
-      });
-      // {buckets} and {sample_clause} literal substitution
-      sqlText = sqlText.replaceAll('{buckets}', String(Math.floor(buckets)));
-      sqlText = sqlText.replaceAll('{sample_clause}', samplePct ? `TABLESAMPLE SYSTEM (${Math.floor(samplePct)})` : '');
+      let sqlText: string;
+      if (this.dbType === 'access') {
+        sqlText = this.sql.load('histogram', {
+          table_name: table,
+          column_name: column,
+        }, {
+          buckets: Math.floor(buckets),
+        });
+      } else {
+        sqlText = this.sql.load('histogram', {
+          schema_name: schema,
+          table_name: table,
+          column_name: column,
+        });
+        sqlText = sqlText.replaceAll('{buckets}', String(Math.floor(buckets)));
+        sqlText = sqlText.replaceAll('{sample_clause}', samplePct ? `TABLESAMPLE SYSTEM (${Math.floor(samplePct)})` : '');
+      }
 
       const { rows } = await conn.query(sqlText);
       return rows.map((r) => ({

@@ -3,7 +3,7 @@
  */
 import type { SensitivityLevel } from '../metrics/sensitivity.js';
 
-export type DbType = 'postgresql' | 'mssql' | 'oracle' | 'hanabw';
+export type DbType = 'postgresql' | 'mssql' | 'oracle' | 'hanabw' | 'access';
 
 export interface DatabaseConfig {
   alias: string;
@@ -21,6 +21,7 @@ export interface DatabaseConfig {
   poolMax: number;
   bwTableFilter: string[];
   bwDescriptionLang: string;
+  dbq: string;
 }
 
 export interface QualityWeights {

@@ -7,14 +7,21 @@ import type { BaseConnector } from '../connectors/base-connector.js';
 import type { DbConnection, RowCountResult } from '../profiler/types.js';
 
 export class BasicMetrics {
+  private dbType: string;
+
   constructor(
     private sql: SqlLoader,
     private connector: BaseConnector,
-  ) {}
+  ) {
+    this.dbType = connector['config'].dbType;
+  }
 
   async getRowCount(conn: DbConnection, schema: string, table: string): Promise<RowCountResult> {
     const logger = getLogger();
-    const sqlText = this.sql.load('row_count', { schema_name: schema, table_name: table });
+    const identifiers: Record<string, string> = this.dbType === 'access'
+      ? { table_name: table }
+      : { schema_name: schema, table_name: table };
+    const sqlText = this.sql.load('row_count', identifiers);
     try {
       const { rows } = await conn.query(sqlText);
       return { row_count: Number(rows[0]?.row_count ?? 0), estimated: false };
@@ -51,11 +58,22 @@ export class BasicMetrics {
 
     // NULL ratio + distinct
     try {
-      const sqlText = this.sql.load('null_ratio', {
-        schema_name: schema,
-        table_name: table,
-        column_name: column,
-      });
+      let sqlText: string;
+      if (this.dbType === 'access') {
+        const distinctExpr = `(SELECT COUNT(*) FROM (SELECT DISTINCT [${column}] FROM [${table}] WHERE [${column}] IS NOT NULL) AS t)`;
+        sqlText = this.sql.load('null_ratio', {
+          table_name: table,
+          column_name: column,
+        }, {
+          distinct_count_expr: distinctExpr,
+        });
+      } else {
+        sqlText = this.sql.load('null_ratio', {
+          schema_name: schema,
+          table_name: table,
+          column_name: column,
+        });
+      }
       const { rows } = await conn.query(sqlText);
       const row = rows[0];
       if (row) {
@@ -76,11 +94,10 @@ export class BasicMetrics {
 
     // Min/max
     try {
-      const sqlText = this.sql.load('min_max', {
-        schema_name: schema,
-        table_name: table,
-        column_name: column,
-      });
+      const mmIdent: Record<string, string> = this.dbType === 'access'
+        ? { table_name: table, column_name: column }
+        : { schema_name: schema, table_name: table, column_name: column };
+      const sqlText = this.sql.load('min_max', mmIdent);
       const { rows } = await conn.query(sqlText);
       const row = rows[0];
       if (row) {
@@ -120,11 +137,10 @@ export class BasicMetrics {
     if (rowCount === 0) return result;
 
     try {
-      const sqlText = this.sql.load('null_ratio_lite', {
-        schema_name: schema,
-        table_name: table,
-        column_name: column,
-      });
+      const nrIdent: Record<string, string> = this.dbType === 'access'
+        ? { table_name: table, column_name: column }
+        : { schema_name: schema, table_name: table, column_name: column };
+      const sqlText = this.sql.load('null_ratio_lite', nrIdent);
       const { rows } = await conn.query(sqlText);
       const row = rows[0];
       if (row) {
@@ -143,11 +159,10 @@ export class BasicMetrics {
 
     // Min/max
     try {
-      const sqlText = this.sql.load('min_max', {
-        schema_name: schema,
-        table_name: table,
-        column_name: column,
-      });
+      const mmIdent: Record<string, string> = this.dbType === 'access'
+        ? { table_name: table, column_name: column }
+        : { schema_name: schema, table_name: table, column_name: column };
+      const sqlText = this.sql.load('min_max', mmIdent);
       const { rows } = await conn.query(sqlText);
       const row = rows[0];
       if (row) {

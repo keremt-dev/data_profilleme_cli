@@ -7,6 +7,7 @@ import type { DbType } from '../config/types.js';
 
 const IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 const HANA_IDENTIFIER_RE = /^[a-zA-Z_/][a-zA-Z0-9_/]*$/;
+const ACCESS_IDENTIFIER_RE = /^.+$/;
 
 export class SqlLoader {
   private sqlDir: string;
@@ -26,7 +27,11 @@ export class SqlLoader {
    * Load SQL template and substitute identifier params.
    * Value params (%(name)s for pg, ? for mssql) are left untouched.
    */
-  load(templateName: string, identifierParams: Record<string, string> = {}): string {
+  load(
+    templateName: string,
+    identifierParams: Record<string, string> = {},
+    literalParams: Record<string, string | number> = {},
+  ): string {
     if (!this.cache.has(templateName)) {
       const filePath = path.join(this.sqlDir, `${templateName}.sql`);
       if (!fs.existsSync(filePath)) {
@@ -42,6 +47,10 @@ export class SqlLoader {
       sql = sql.replaceAll(`{${key}}`, quoted);
     }
 
+    for (const [key, value] of Object.entries(literalParams)) {
+      sql = sql.replaceAll(`{${key}}`, String(value));
+    }
+
     return sql;
   }
 
@@ -50,6 +59,12 @@ export class SqlLoader {
    * PostgreSQL/Oracle: "name", MSSQL: [name]
    */
   validateIdentifier(name: string): string {
+    if (this.dbType === 'access') {
+      if (!ACCESS_IDENTIFIER_RE.test(name)) {
+        throw new Error(`Gecersiz SQL identifier: '${name}'.`);
+      }
+      return `[${name}]`;
+    }
     const re = this.dbType === 'hanabw' ? HANA_IDENTIFIER_RE : IDENTIFIER_RE;
     if (!re.test(name)) {
       throw new Error(
@@ -107,5 +122,13 @@ export class SqlLoader {
       return `@p${idx}`;
     });
     return { sql: transformed, inputs };
+  }
+
+  /**
+   * Access ? positional params — used directly with odbc.query(sql, values).
+   * Unlike MSSQL, no @p1 conversion needed.
+   */
+  accessParams(sql: string, params: unknown[]): { sql: string; values: unknown[] } {
+    return { sql, values: params };
   }
 }

@@ -3,22 +3,48 @@
  */
 import { z } from 'zod';
 
-const dbTypeEnum = z.enum(['postgresql', 'mssql', 'oracle', 'hanabw']);
+const dbTypeEnum = z.enum(['postgresql', 'mssql', 'oracle', 'hanabw', 'access']);
 
 const databaseConfigSchema = z.object({
   db_type: dbTypeEnum.default('postgresql'),
-  host: z.string().min(1),
-  port: z.coerce.number().int().positive(),
+  host: z.string().default(''),
+  port: z.coerce.number().int().default(0),
   dbname: z.string().default(''),
-  user: z.string().min(1),
+  user: z.string().default(''),
   password: z.string(),
   connect_timeout: z.coerce.number().int().positive().default(15),
   statement_timeout: z.coerce.number().int().positive().default(300000),
   schema_filter: z.union([z.string(), z.array(z.string())]).default('*'),
-  driver: z.string().default('ODBC Driver 17 for SQL Server'),
+  driver: z.string().default(''),
   service_name: z.string().default(''),
   bw_table_filter: z.array(z.string()).default(['/BIC/A', '/BIC/F']),
   bw_description_lang: z.string().default('TR'),
+  dbq: z.string().default(''),
+}).superRefine((data, ctx) => {
+  if (data.db_type === 'access') {
+    if (!data.dbq) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Access icin dbq (dosya yolu) zorunlu', path: ['dbq'] });
+    }
+    if (!data.driver) {
+      data.driver = 'Microsoft Access Driver (*.mdb, *.accdb)';
+    }
+  } else {
+    if (!data.host) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'host zorunlu', path: ['host'] });
+    }
+    if (data.db_type !== 'hanabw' && !data.dbname) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'dbname zorunlu', path: ['dbname'] });
+    }
+    if (!data.user) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'user zorunlu', path: ['user'] });
+    }
+    if (!data.port) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'port zorunlu', path: ['port'] });
+    }
+    if (data.db_type === 'mssql' && !data.driver) {
+      data.driver = 'ODBC Driver 17 for SQL Server';
+    }
+  }
 });
 
 const qualityWeightsSchema = z.object({

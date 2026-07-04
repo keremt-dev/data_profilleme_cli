@@ -36,6 +36,9 @@ export class OutlierDetector {
     samplePct?: number | null,
   ): Promise<OutlierResult | null> {
     const logger = getLogger();
+    if (this.dbType === 'access') {
+      return this.detectAccessOutliers(conn, table, column, iqrMultiplier);
+    }
     try {
       let sqlText = this.sql.load('outlier_detection', {
         schema_name: schema,
@@ -88,6 +91,27 @@ export class OutlierDetector {
       } else {
         logger.warn(`[${schema}.${table}.${column}] outlier detection hatasi: ${err}`);
       }
+    }
+    return null;
+  }
+
+  /**
+   * Access outlier detection: fetch sorted values, compute IQR in Node.js.
+   */
+  private async detectAccessOutliers(
+    conn: DbConnection,
+    table: string,
+    column: string,
+    iqrMultiplier: number,
+  ): Promise<OutlierResult | null> {
+    const logger = getLogger();
+    try {
+      const { AccessConnector } = await import('../connectors/access-connector.js');
+      const accessConn = this.connector as InstanceType<typeof AccessConnector>;
+      const sortedValues = await accessConn.getSortedColumnValues(conn, table, column);
+      return AccessConnector.calculateIqrStats(sortedValues, iqrMultiplier);
+    } catch (err) {
+      logger.warn(`[default.${table}.${column}] access outlier detection hatasi: ${err}`);
     }
     return null;
   }

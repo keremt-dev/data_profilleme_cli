@@ -2,6 +2,7 @@
  * YAML config loader and validator.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { parse as yamlParse } from 'yaml';
 import { appConfigSchema } from './schema.js';
 import type { AppConfig, DatabaseConfig } from './types.js';
@@ -34,12 +35,20 @@ export function loadConfig(configPath: string): AppConfig {
   // Build databases map
   const databases: Record<string, DatabaseConfig> = {};
   for (const [alias, db] of Object.entries(data.databases)) {
+    // Access file existence check
+    if (db.db_type === 'access' && db.dbq) {
+      const resolvedPath = path.resolve(db.dbq);
+      if (!fs.existsSync(resolvedPath)) {
+        throw new ConfigError(`Access dosyasi bulunamadi: '${resolvedPath}' (databases.${alias}.dbq)`);
+      }
+    }
+
     databases[alias] = {
       alias,
       dbType: db.db_type,
       host: db.host,
       port: db.port,
-      dbname: db.dbname,
+      dbname: db.db_type === 'access' ? path.basename(db.dbq || '') : db.dbname,
       user: db.user,
       password: db.password,
       connectTimeout: db.connect_timeout,
@@ -50,6 +59,7 @@ export function loadConfig(configPath: string): AppConfig {
       poolMax: data.profiling.concurrency,
       bwTableFilter: db.bw_table_filter,
       bwDescriptionLang: db.bw_description_lang,
+      dbq: db.dbq,
     };
   }
 

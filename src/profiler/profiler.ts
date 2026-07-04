@@ -105,6 +105,8 @@ export class Profiler {
       );
     }
 
+    // Checkpoint'teki tamamlanmis tablolarin profillerine hizli erisim icin lookup.
+    // Resume sirasinda atlanan tablolarin verisini yeni schema objesine geri yuklemek icin kullanilir.
     const checkpointTableMap = new Map<string, TableProfile>();
     if (checkpointData) {
       for (const s of checkpointData.partial_profile.schemas) {
@@ -187,7 +189,8 @@ export class Profiler {
         schema_quality_score: 0,
       };
 
-      // Restore completed tables from checkpoint into fresh schema
+      // Resume: checkpoint'te tamamlanmis tablolarin profilini yeni schema'ya geri yukle.
+      // Bu olmadan atlanan tablolar (profileSchema icinde skip edilir) ciktidan tamamen kaybolur.
       if (completedTables.size > 0) {
         for (const t of tables) {
           const key = `${schema}.${t.table_name}`;
@@ -384,6 +387,19 @@ export class Profiler {
     const logger = getLogger();
     const sqlText = this.sql.load('metadata');
     const metadata = new Map<string, Record<string, unknown>[]>();
+
+    // Access: metadata via ODBC API (no SQL catalog)
+    if (this.dbConfig.dbType === 'access') {
+      try {
+        const { AccessConnector } = await import('../connectors/access-connector.js');
+        const accessConn = this.connector as InstanceType<typeof AccessConnector>;
+        const tables = await this.connector.discoverTables(schema);
+        return await accessConn.getTableMetadataViaOdbc(tables.map((t) => t.table_name));
+      } catch (e) {
+        logger.warn(`[${schema}] Access metadata cekme hatasi: ${e}`);
+        return metadata;
+      }
+    }
 
     try {
       let result;

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { CheckpointManager } from '../checkpoint-manager.js';
-import type { DatabaseProfile } from '../types.js';
+import type { DatabaseProfile, TableProfile } from '../types.js';
 
 function makeProfile(alias: string, schemaName: string, tableNames: string[]): DatabaseProfile {
   return {
@@ -117,25 +117,25 @@ describe('Checkpoint resume flow', () => {
     expect(toProfile).toEqual(['T4']);
   });
 
-  it('resume merges checkpoint tables into fresh schema', () => {
-    // Simulate: checkpoint has 3 completed tables for SAPABAP1
+  it('resume merges checkpoint tables into fresh schema (data-loss fix)', () => {
+    // Checkpoint: SAPABAP1 icin 3 tamamlanmis tablo
     const profile = makeProfile('sap_bw', 'SAPABAP1', ['T1', 'T2', 'T3']);
     const completed = new Set(['SAPABAP1.T1', 'SAPABAP1.T2', 'SAPABAP1.T3']);
     mgr.save(profile, completed);
 
-    // --- Resume begins ---
+    // --- Resume basliyor ---
     const ckpt = mgr.load('sap_bw')!;
     const resumedCompleted = new Set(ckpt.completed_tables);
 
-    // Build a lookup of checkpoint tables keyed by "schema.table"
-    const checkpointTableMap = new Map<string, typeof ckpt.partial_profile.schemas[0]['tables'][0]>();
+    // profiler.ts'deki checkpointTableMap ile ayni lookup
+    const checkpointTableMap = new Map<string, TableProfile>();
     for (const s of ckpt.partial_profile.schemas) {
       for (const t of s.tables) {
         checkpointTableMap.set(`${s.schema_name}.${t.table_name}`, t);
       }
     }
 
-    // Simulate the schema loop: create fresh schema (this is what profiler.ts does)
+    // Schema dongusu: taze bos schema (profiler.ts ~satir 175)
     const allTables = ['T1', 'T2', 'T3', 'T4', 'T5'];
     const schemaProf = {
       schema_name: 'SAPABAP1',
@@ -143,11 +143,11 @@ describe('Checkpoint resume flow', () => {
       total_rows: 0,
       total_size_bytes: 0,
       total_size_display: '0 B',
-      tables: [] as typeof ckpt.partial_profile.schemas[0]['tables'],
+      tables: [] as TableProfile[],
       schema_quality_score: 0,
     };
 
-    // THE FIX pattern: restore checkpoint tables for skipped entries
+    // FIX: atlanan (completed) tablolarin profilini geri yukle
     for (const tName of allTables) {
       const key = `SAPABAP1.${tName}`;
       if (resumedCompleted.has(key)) {
@@ -160,12 +160,12 @@ describe('Checkpoint resume flow', () => {
       }
     }
 
-    // Simulate new tables being profiled (T4, T5)
+    // Yeni tablolar profillendi (T4, T5)
     for (const tName of ['T4', 'T5']) {
-      const newTable = {
+      schemaProf.tables.push({
         schema_name: 'SAPABAP1',
         table_name: tName,
-        table_type: 'BASE TABLE' as const,
+        table_type: 'BASE TABLE',
         description: null,
         row_count: 200,
         estimated_rows: 200,
@@ -179,21 +179,18 @@ describe('Checkpoint resume flow', () => {
         table_size_bytes: 2048,
         table_size_display: '2.0 KB',
         table_quality_score: 0.9,
-        table_quality_grade: 'A' as const,
+        table_quality_grade: 'A',
         dwh_mapped: false,
         dwh_target_tables: [],
-      };
-      schemaProf.tables.push(newTable);
-      schemaProf.total_rows += newTable.row_count;
-      schemaProf.total_size_bytes += newTable.table_size_bytes ?? 0;
+      });
+      schemaProf.total_rows += 200;
+      schemaProf.total_size_bytes += 2048;
     }
 
-    // ASSERT: all 5 tables present (3 from checkpoint + 2 new)
+    // ASSERT: 5 tablo (3 checkpoint + 2 yeni), veri kaybi yok
     expect(schemaProf.tables).toHaveLength(5);
     expect(schemaProf.tables.map((t) => t.table_name)).toEqual(['T1', 'T2', 'T3', 'T4', 'T5']);
-    // Checkpoint tables: 3 * 100 rows = 300, new tables: 2 * 200 = 400
-    expect(schemaProf.total_rows).toBe(700);
-    // Checkpoint tables: 3 * 1024 = 3072, new tables: 2 * 2048 = 4096
-    expect(schemaProf.total_size_bytes).toBe(7168);
+    expect(schemaProf.total_rows).toBe(700); // 3*100 + 2*200
+    expect(schemaProf.total_size_bytes).toBe(7168); // 3*1024 + 2*2048
   });
 });
