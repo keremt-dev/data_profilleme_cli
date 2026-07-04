@@ -33,17 +33,19 @@ export class OutlierDetector {
     table: string,
     column: string,
     iqrMultiplier: number = 1.5,
+    samplePct?: number | null,
   ): Promise<OutlierResult | null> {
     const logger = getLogger();
     if (this.dbType === 'access') {
       return this.detectAccessOutliers(conn, table, column, iqrMultiplier);
     }
     try {
-      const sqlText = this.sql.load('outlier_detection', {
+      let sqlText = this.sql.load('outlier_detection', {
         schema_name: schema,
         table_name: table,
         column_name: column,
       });
+      sqlText = sqlText.replaceAll('{sample_clause}', samplePct ? `TABLESAMPLE SYSTEM (${Math.floor(samplePct)})` : '');
 
       let result;
       if (this.dbType === 'mssql' || this.dbType === 'hanabw') {

@@ -4,7 +4,7 @@ WITH stats AS (
     SELECT
         MIN(CAST({column_name} AS DOUBLE)) AS min_val,
         MAX(CAST({column_name} AS DOUBLE)) AS max_val
-    FROM {schema_name}.{table_name}
+    FROM {schema_name}.{table_name} {sample_clause}
     WHERE {column_name} IS NOT NULL
 ),
 bucketed AS (
@@ -20,7 +20,7 @@ bucketed AS (
         END AS bucket,
         s.min_val,
         s.max_val
-    FROM {schema_name}.{table_name} t, stats s
+    FROM {schema_name}.{table_name} t {sample_clause}, stats s
     WHERE {column_name} IS NOT NULL
 )
 SELECT

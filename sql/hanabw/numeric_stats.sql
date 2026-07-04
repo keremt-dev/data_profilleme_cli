@@ -8,5 +8,5 @@ SELECT DISTINCT
     PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY CAST({column_name} AS DOUBLE)) OVER()            AS p75,
     PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY CAST({column_name} AS DOUBLE)) OVER()            AS p95,
     PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY CAST({column_name} AS DOUBLE)) OVER()            AS p99
-FROM {schema_name}.{table_name}
+FROM {schema_name}.{table_name} {sample_clause}
 WHERE {column_name} IS NOT NULL

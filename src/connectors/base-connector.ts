@@ -16,4 +16,17 @@ export abstract class BaseConnector {
   abstract getTableSize(conn: DbConnection, schema: string, table: string): Promise<number | null>;
   abstract isQueryTimeoutError(error: unknown): boolean;
   abstract executeQuery(sql: string, params?: unknown): Promise<Record<string, unknown>[] | null>;
+
+  /**
+   * Bulk column statistics from system catalog (optional).
+   * Returns Map<column_name, { distinct_count }>.
+   * Override in connectors that support catalog-level stats (e.g. HANA M_CS_COLUMNS).
+   */
+  async getColumnStatsFromCatalog(
+    _conn: DbConnection,
+    _schema: string,
+    _table: string,
+  ): Promise<Map<string, { distinct_count: number }> | null> {
+    return null;
+  }
 }

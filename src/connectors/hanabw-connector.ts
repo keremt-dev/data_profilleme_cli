@@ -254,6 +254,38 @@ export class HanaBwConnector extends BaseConnector {
   }
 
   /**
+   * Bulk column statistics from HANA column store system view.
+   * M_CS_COLUMNS provides pre-computed DISTINCT_COUNT per column.
+   */
+  async getColumnStatsFromCatalog(
+    conn: DbConnection,
+    schema: string,
+    table: string,
+  ): Promise<Map<string, { distinct_count: number }> | null> {
+    const logger = getLogger();
+    try {
+      const sql = `
+        SELECT COLUMN_NAME, SUM(DISTINCT_COUNT) AS distinct_count
+        FROM SYS.M_CS_COLUMNS
+        WHERE SCHEMA_NAME = ? AND TABLE_NAME = ? AND COUNT > 0
+        GROUP BY COLUMN_NAME
+      `;
+      const { rows } = await conn.query(sql, [schema, table]);
+      const stats = new Map<string, { distinct_count: number }>();
+      for (const r of rows) {
+        stats.set(String(r.column_name), {
+          distinct_count: Number(r.distinct_count ?? 0),
+        });
+      }
+      logger.debug(`[${schema}.${table}] M_CS_COLUMNS: ${stats.size} kolon istatistigi alindi`);
+      return stats;
+    } catch (e) {
+      logger.warn(`[${schema}.${table}] M_CS_COLUMNS okunamadi, fallback: ${e}`);
+      return null;
+    }
+  }
+
+  /**
    * Extract BW InfoProvider name from table name.
    * DSO active:  /BIC/A<ODSOBJECT>00 → ODSOBJECT
    * DSO cl:      /BIC/A<ODSOBJECT>40 → ODSOBJECT

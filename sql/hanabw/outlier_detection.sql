@@ -4,7 +4,7 @@ WITH quartiles AS (
     SELECT DISTINCT
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY CAST({column_name} AS DOUBLE)) OVER() AS q1,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY CAST({column_name} AS DOUBLE)) OVER() AS q3
-    FROM {schema_name}.{table_name}
+    FROM {schema_name}.{table_name} {sample_clause}
     WHERE {column_name} IS NOT NULL
 ),
 bounds AS (
@@ -21,6 +21,6 @@ SELECT
                  OR CAST(t.{column_name} AS DOUBLE) > b.upper_bound
                THEN 1 END) AS outlier_count,
     COUNT(t.{column_name}) AS total_non_null
-FROM {schema_name}.{table_name} t, bounds b
+FROM {schema_name}.{table_name} t {sample_clause}, bounds b
 WHERE t.{column_name} IS NOT NULL
 GROUP BY b.q1, b.q3, b.iqr, b.lower_bound, b.upper_bound
