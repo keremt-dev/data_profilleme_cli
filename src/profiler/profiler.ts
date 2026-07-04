@@ -109,6 +109,17 @@ export class Profiler {
       );
     }
 
+    // Checkpoint'teki tamamlanmis tablolarin profillerine hizli erisim icin lookup.
+    // Resume sirasinda atlanan tablolarin verisini yeni schema objesine geri yuklemek icin kullanilir.
+    const checkpointTableMap = new Map<string, TableProfile>();
+    if (checkpointData) {
+      for (const s of checkpointData.partial_profile.schemas) {
+        for (const t of s.tables) {
+          checkpointTableMap.set(`${s.schema_name}.${t.table_name}`, t);
+        }
+      }
+    }
+
     if (!(await this.connector.testConnection())) {
       logger.error(`[${this.dbConfig.alias}] Baglanti kurulamadi, profilleme iptal.`);
       return dbProfile;
@@ -181,6 +192,23 @@ export class Profiler {
         tables: [],
         schema_quality_score: 0,
       };
+
+      // Resume: checkpoint'te tamamlanmis tablolarin profilini yeni schema'ya geri yukle.
+      // Bu olmadan atlanan tablolar (profileSchema icinde skip edilir) ciktidan tamamen kaybolur.
+      if (completedTables.size > 0) {
+        for (const t of tables) {
+          const key = `${schema}.${t.table_name}`;
+          if (completedTables.has(key)) {
+            const prev = checkpointTableMap.get(key);
+            if (prev) {
+              schemaProf.tables.push(prev);
+              schemaProf.total_rows += prev.row_count;
+              schemaProf.total_size_bytes += prev.table_size_bytes ?? 0;
+            }
+          }
+        }
+      }
+
       dbProfile.schemas.push(schemaProf);
 
       await this.profileSchema(schema, tables, pbar, completedTables, schemaProf, dbProfile, prevTableMap);
